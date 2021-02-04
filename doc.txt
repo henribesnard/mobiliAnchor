@@ -1,0 +1,235 @@
+1-  créer un dossier pour projet
+
+2- installer et activer un environement virtuel
+  python -m virtualenv .venv
+  C:\Users\andri\Desktop\Mobili\KwaboAnchor\kwaabo\.venv\Scripts\activate.bat
+
+3- installer django-polaris
+  pip install django-polaris
+
+4 - initier un projet
+django-admin stratproject app
+
+5- configuer settings.py
+INSTALLED_APPS = [
+    ...,
+    "corsheaders",
+    "rest_framework",
+    "app",
+    "polaris",
+]
+
+S'assurer que WhiteNoiseMiddleware soit en dessous de CorsMiddleware
+MIDDLEWARE = [
+    ...,
+    'corsheaders.middleware.CorsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    ...
+]
+
+import os
+import environ
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+
+env = environ.Env()
+if os.path.exists(os.path.join(PROJECT_ROOT, ".env")):
+    env.read_env(os.path.join(PROJECT_ROOT, ".env"))
+
+AJOUTER LES SEP
+ACTIVE_SEPS = ["sep-1", "sep-10", "sep-24"]
+
+CONFIGURER LES FICHIERS STATIC
+
+STATIC_ROOT = os.path.join(BASE_DIR, "collectstatic")
+STATIC_URL = "/static"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+REMPLACER LE WIDGET FORMULAIRE PAR DEFAUT DE DJANGO
+FORM_RENDERER = "django.forms.renderers.TemplatesSetting"
+
+
+
+DANS URLS.Py
+Ajouter les points de terminaison polaris
+
+from django.contrib import admin
+from django.urls import path, include
+import polaris.urls
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path("", include(polaris.urls))
+]
+
+CREER LE FICHIER DES VARIABLES D'ENVIRONNEMENT
+touch .env
+dans le fichier .env
+STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
+HORIZON_URI="https://horizon-testnet.stellar.org/"
+HOST_URL="http://localhost:8000"
+LOCAL_MODE=1
+SERVER_JWT_KEY="supersecretjwtencodingstring"
+SIGNING_SEED=
+
+SIGNING_SEED : public = GDKYKV3ISSSQ7CYTGX3XXO4YGO6QWPGB45Z5FE32XY4Z75RJ6M5HCRIF
+               secret = SAOEZH4ZDFID2JQZEVOL7A3B4EBSCD4FVPKLUO2VOOFJGGPTBI4CXGFB
+
+
+EMETTE ET AJOUTER UN ASSET(KWB)
+python app/manage.py testnet issue --asset=KWB
+
+Issuer account public and private keys:
+public key: GAOYWB623PRJZBH3ZNB2SNGYRGYM2EUWX57BPQPIZJ4JPXBWFEDWW36X
+secret key: SABGIC2UJPKSINQ7IOBUQFY4WCQ4MXHLAWOT3DJBYTOAQI2NHHIKUP6M
+
+Distribution account public and private keys:
+public key: GD4NCXGH5ZVYL5JAXMKEJHWWGXGZD56AXDL6BBUPUEKG3Q5DTANHIMV5
+secret key: SAMEGRRROHQGYCPNNIILBSVGCS37XHJ2K4CJTZRO4L5CD62WLMPPVTKT
+
+
+AJOUTER L'ASSET A LA BASE DE DONNEES
+dans settings.py
+DATABASES = {
+    'default': env.db(
+        "DATABASE_URL", default="sqlite:////" + os.path.join(os.path.dirname(BASE_DIR), "data/db.sqlite3")
+    )
+}
+python app/manage.py migrate  (Après avoir créer le dossier data à la racine du projet)
+
+ensuite dans le shell de python (python app/manage.py shell)
+from polaris.models import Asset
+
+Asset.objects.create(
+    code="KWB",
+    issuer=,
+    distribution_seed=,
+    sep24_enabled=True
+)
+
+Collecter les actifs statics
+python app/manage.py collectstatic --no-input
+
+EXECUTER LE SERVEUR
+python app/manage.py runserver
+
+METTRE EN OEUVRE DES INTEGRATIONS
+Creer les intregrations.py et apps.py
+
+integrations.py :
+from typing import List
+from polaris.integrations import RailsIntegration
+from polaris.models import Transaction, Asset
+from django.db.models import QuerySet
+
+class MyRailsIntegration(RailsIntegration):
+    def poll_pending_deposits(self, pending_deposits: QuerySet) -> List[Transaction]:
+        return list(pending_deposits)
+
+    def execute_outgoing_transaction(self, transaction: Transaction):
+        transaction.amount_fee = 1
+        transaction.status = Transaction.STATUS.completed
+        transaction.save()
+
+def toml():
+    asset = Asset.objects.first()
+    return{
+        "DOCUMENTATION":{
+            "ORG_NAME": "Stellar Development Foundation",
+            "ORG_URL": "https://stellar.org"
+        },
+        "PRINCIPALS":[
+            {
+                "name": "Besnard HOUNWANOU"
+            }
+        ],
+        "CURRENCIES":[
+            {
+                "code": asset.code,
+                "issuer": asset.issuer,
+                "status": "test",
+                "display_decimals": 2,
+                "name": "stellar reference token",
+                "desc": "A fake asset on testnet for demonstration",
+            }
+        ]
+    }
+
+apps.py : 
+from django.apps import AppConfig
+
+class MyAppConfig(AppConfig):
+    name = "app"
+
+    def ready(self):
+        from polaris.integrations import register_integrations
+        from .integrations import MyRailsIntegration, toml
+
+        register_integrations(
+            toml=toml,
+            rails=MyRailsIntegration()
+        )
+
+__init__.py:
+default_app_config = "app.apps.MyAppConfig"
+
+EXECUTER LE SERVICE SEP-24
+créer requirements.txt avec: pip freeze > requirements.txt
+
+Ecrire un Dockerfile:
+FROM python:3.7-slim-buster
+
+RUN apt-get update && apt-get install -y build-essential
+WORKDIR /home
+RUN mkdir /home/data
+COPY app /home/app/
+COPY .env requirements.txt /home/
+
+RUN pip install -r requirements.txt && python /home/app/manage.py collectstatic --no-input
+
+CMD python /home/app/manage.py runserver --nostatic 0.0.0.0:8000
+
+
+Dans un fichier docker-compose.yml ecrire:
+
+version: "3"
+
+services:
+  server:
+    container_name: "test-server"
+    build: .
+    volumes:
+      - ./data:/home/data
+    ports:
+      - "8000:8000"
+    command: python app/manage.py runserver --nostatic 0.0.0.0:8000
+  execute_outgoing_transactions:
+    container_name: "test-execute_outgoing_transactions"
+    build: .
+    volumes:
+      - ./data:/home/data
+    command: python app/manage.py execute_outgoing_transactions --loop
+  check_trustlines:
+    container_name: "test-check_trustlines"
+    build: .
+    volumes:
+      - ./data:/home/data
+    command: python app/manage.py check_trustlines --loop
+  watch_transaction:
+    container_name: "test-watch_transactions"
+    build: .
+    volumes:
+      - ./data:/home/data
+    command: python app/manage.py watch_transactions
+  poll_pending_deposits:
+    container_name: "test-poll_pending_deposits"
+    build: .
+    volumes:
+      - ./data:/home/data
+    command: python app/manage.py poll_pending_deposits --loop
+
+CREER ET EXCUTER LE CONTENEUR(Docker lancé)
+docker-compose build
+docker-compose up
